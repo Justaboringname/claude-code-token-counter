@@ -69,8 +69,12 @@ pub struct Usage {
     pub by_model: HashMap<String, ModelUsage>,
     #[serde(rename = "byTool")]
     pub by_tool: Vec<ToolUsage>,
-    #[serde(rename = "dailySpend")]
-    pub daily_spend: Vec<f64>,
+    #[serde(rename = "sparkline")]
+    pub sparkline: Vec<f64>,
+    #[serde(rename = "sparkLeft")]
+    pub spark_left: String,
+    #[serde(rename = "sparkRight")]
+    pub spark_right: String,
     #[serde(rename = "rangeLabel")]
     pub range_label: String,
     #[serde(rename = "totalCost")]
@@ -247,8 +251,9 @@ fn extract_tool_uses(content: &serde_json::Value) -> Vec<String> {
     out
 }
 
-fn find_latest_session_id() -> Option<String> {
-    let mut best: Option<(DateTime<Utc>, String)> = None;
+fn find_latest_session() -> Option<(String, DateTime<Utc>, DateTime<Utc>)> {
+    let mut latest: Option<(DateTime<Utc>, String)> = None;
+    let mut spans: HashMap<String, (DateTime<Utc>, DateTime<Utc>)> = HashMap::new();
     for path in list_jsonl_files() {
         let Ok(file) = File::open(&path) else { continue };
         let reader = BufReader::new(file);
@@ -270,23 +275,137 @@ fn find_latest_session_id() -> Option<String> {
             else {
                 continue;
             };
-            match &best {
+            let entry = spans.entry(sid.to_string()).or_insert((ts, ts));
+            if ts < entry.0 {
+                entry.0 = ts;
+            }
+            if ts > entry.1 {
+                entry.1 = ts;
+            }
+            match &latest {
                 Some((t, _)) if *t >= ts => {}
-                _ => best = Some((ts, sid.to_string())),
+                _ => latest = Some((ts, sid.to_string())),
             }
         }
     }
-    best.map(|(_, sid)| sid)
+    latest.and_then(|(_, sid)| {
+        spans.get(&sid).map(|(s, e)| (sid.clone(), *s, *e))
+    })
+}
+
+struct SparkCfg {
+    start: DateTime<Utc>,
+    bucket_seconds: i64,
+    count: usize,
+    left: String,
+    right: String,
+}
+
+fn spark_config(range: &Range, session_span: Option<(DateTime<Utc>, DateTime<Utc>)>) -> SparkCfg {
+    let now = Utc::now();
+    let local_now = Local::now();
+    match range {
+        Range::Live => SparkCfg {
+            start: now - Duration::minutes(30),
+            bucket_seconds: 60,
+            count: 30,
+            left: "30m ago".into(),
+            right: "now".into(),
+        },
+        Range::Today => {
+            let midnight = local_now
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|d| Local.from_local_datetime(&d).single())
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or(now);
+            SparkCfg {
+                start: midnight,
+                bucket_seconds: 3600,
+                count: 24,
+                left: "12am".into(),
+                right: "now".into(),
+            }
+        }
+        Range::Week => {
+            let weekday = local_now.weekday().num_days_from_monday() as i64;
+            let start = (local_now - Duration::days(weekday))
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|d| Local.from_local_datetime(&d).single())
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or(now - Duration::days(7));
+            SparkCfg {
+                start,
+                bucket_seconds: 86400,
+                count: 7,
+                left: "Mon".into(),
+                right: "Today".into(),
+            }
+        }
+        Range::Month => {
+            let start = local_now
+                .date_naive()
+                .with_day(1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .and_then(|d| Local.from_local_datetime(&d).single())
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or(now - Duration::days(30));
+            let days = local_now.day() as usize;
+            SparkCfg {
+                start,
+                bucket_seconds: 86400,
+                count: days.max(1),
+                left: "1st".into(),
+                right: "Today".into(),
+            }
+        }
+        Range::All => SparkCfg {
+            start: (local_now - Duration::days(29))
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|d| Local.from_local_datetime(&d).single())
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or(now - Duration::days(30)),
+            bucket_seconds: 86400,
+            count: 30,
+            left: "30d ago".into(),
+            right: "Today".into(),
+        },
+        Range::Session => {
+            if let Some((start, end)) = session_span {
+                let span = (end - start).num_seconds().max(60);
+                let bucket = (span / 20).max(30);
+                SparkCfg {
+                    start,
+                    bucket_seconds: bucket,
+                    count: 20,
+                    left: "start".into(),
+                    right: "now".into(),
+                }
+            } else {
+                SparkCfg {
+                    start: now - Duration::hours(1),
+                    bucket_seconds: 180,
+                    count: 20,
+                    left: "start".into(),
+                    right: "now".into(),
+                }
+            }
+        }
+    }
 }
 
 pub fn compute_usage(range_str: &str) -> Usage {
     let range = Range::parse(range_str);
     let range_start = range.start();
-    let session_filter: Option<String> = if matches!(range, Range::Session) {
-        find_latest_session_id()
+    let latest_session = if matches!(range, Range::Session) {
+        find_latest_session()
     } else {
         None
     };
+    let session_filter: Option<String> = latest_session.as_ref().map(|(sid, _, _)| sid.clone());
+    let session_span = latest_session.as_ref().map(|(_, s, e)| (*s, *e));
 
     let mut by_model: HashMap<String, ModelUsage> = HashMap::new();
     let mut tool_counts: HashMap<String, (u64, u64)> = HashMap::new();
@@ -294,6 +413,9 @@ pub fn compute_usage(range_str: &str) -> Usage {
 
     let today_local = Local::now().date_naive();
     let mut daily: Vec<f64> = vec![0.0; 30];
+
+    let spark_cfg = spark_config(&range, session_span);
+    let mut spark: Vec<f64> = vec![0.0; spark_cfg.count];
 
     let files = list_jsonl_files();
     for path in files {
@@ -361,16 +483,25 @@ pub fn compute_usage(range_str: &str) -> Usage {
             if let Some(t) = ts_utc {
                 let local_d = t.with_timezone(&Local).date_naive();
                 let diff = today_local.signed_duration_since(local_d).num_days();
+                let tmp = ModelUsage {
+                    input: in_k,
+                    out: out_k,
+                    cache_write: cw_k,
+                    cache_read: cr_k,
+                };
+                let cost = calc_cost_k(&tmp, &model);
                 if (0..30).contains(&diff) {
-                    let tmp = ModelUsage {
-                        input: in_k,
-                        out: out_k,
-                        cache_write: cw_k,
-                        cache_read: cr_k,
-                    };
-                    let cost = calc_cost_k(&tmp, &model);
                     let idx = (29 - diff) as usize;
                     daily[idx] += cost;
+                }
+                if in_range {
+                    let delta_secs = (t - spark_cfg.start).num_seconds();
+                    if delta_secs >= 0 {
+                        let bucket = (delta_secs / spark_cfg.bucket_seconds) as usize;
+                        if bucket < spark_cfg.count {
+                            spark[bucket] += cost;
+                        }
+                    }
                 }
             }
         }
@@ -407,7 +538,9 @@ pub fn compute_usage(range_str: &str) -> Usage {
     Usage {
         by_model,
         by_tool: tools,
-        daily_spend: daily,
+        sparkline: spark,
+        spark_left: spark_cfg.left,
+        spark_right: spark_cfg.right,
         range_label: range.label().to_string(),
         total_cost,
         total_tokens,
@@ -421,15 +554,19 @@ mod tests {
 
     #[test]
     fn smoke_compute_all() {
-        for r in ["session", "today", "week", "month", "all"] {
+        for r in ["live", "session", "today", "week", "month", "all"] {
             let u = compute_usage(r);
             eprintln!(
-                "{:10} cost=${:.2} tokens={:.1}K tools={} daily_last7={:?}",
+                "{:10} cost=${:.2} tokens={:.1}K tools={} spark[{}..{}]=({})-({}) sum={:.2}",
                 r,
                 u.total_cost,
                 u.total_tokens,
                 u.by_tool.len(),
-                &u.daily_spend[23..],
+                u.sparkline.len(),
+                u.sparkline.len(),
+                u.spark_left,
+                u.spark_right,
+                u.sparkline.iter().sum::<f64>(),
             );
         }
     }

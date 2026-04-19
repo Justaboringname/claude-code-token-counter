@@ -12,7 +12,9 @@ type Range = 'live' | 'session' | 'today' | 'week' | 'month' | 'all';
 interface Usage {
   byModel: Record<string, ModelUsage>;
   byTool: { name: string; calls: number; tokens: number }[];
-  dailySpend: number[];
+  sparkline: number[];
+  sparkLeft: string;
+  sparkRight: string;
   rangeLabel: string;
   totalCost: number;
   totalTokens: number;
@@ -69,10 +71,12 @@ function sampleUsage(r: Range): Usage {
       { name: 'WebFetch', calls: 84, tokens: 2140 },
       { name: 'Glob', calls: 312, tokens: 180 },
     ],
-    dailySpend: [
+    sparkline: [
       2.1, 1.8, 4.2, 3.6, 5.8, 0.4, 0.2, 6.2, 8.4, 7.1, 9.8, 4.2, 1.1, 0.8, 11.2, 14.8, 9.4, 8.8,
       12.1, 3.2, 0.9, 13.4, 18.2, 22.1, 16.4, 19.8, 6.1, 1.4, 24.8, 17.2,
     ],
+    sparkLeft: '14 days ago',
+    sparkRight: 'Today',
     rangeLabel: {
       live: 'Live',
       session: 'Current session',
@@ -163,10 +167,7 @@ export function PopoverContent() {
       .sort((a, b) => b.cost - a.cost);
   }, [usage]);
 
-  const sparkData = useMemo(
-    () => (usage ? usage.dailySpend.slice(-14) : new Array(14).fill(0)),
-    [usage],
-  );
+  const sparkData = useMemo(() => usage?.sparkline ?? new Array(14).fill(0), [usage]);
 
   const toolTiles = useMemo(() => {
     const used = [...(usage?.byTool ?? [])].sort((a, b) => b.calls - a.calls);
@@ -186,7 +187,13 @@ export function PopoverContent() {
       <TitleBar theme={t} isDark={isDark} onToggleTheme={toggle} onRefresh={() => fetchFresh(range, true)} />
       <RangeBar theme={t} range={range} onPick={pickRange} />
       <Hero theme={t} usage={usage} />
-      <SparkRow theme={t} data={sparkData} color={sparkColor} />
+      <SparkRow
+        theme={t}
+        data={sparkData}
+        color={sparkColor}
+        leftLabel={usage?.sparkLeft ?? ''}
+        rightLabel={usage?.sparkRight ?? ''}
+      />
       <ByModel theme={t} models={models} totalCost={usage?.totalCost ?? 0} />
       <ToolCalls theme={t} tiles={toolTiles} total={totalToolCalls} />
     </GlassSurface>
@@ -218,9 +225,8 @@ function TitleBar({
     >
       <div
         data-tauri-drag-region
-        style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'none' }}
       >
-        <Icon.Dot color="#D97757" size={7} />
         <span style={{ fontWeight: 600, color: t.ink }}>Claude Code</span>
         <span style={{ color: t.inkFaint }}>· usage</span>
       </div>
@@ -337,7 +343,19 @@ function DeltaRow({ theme: t, pct }: { theme: Theme; pct: number }) {
   );
 }
 
-function SparkRow({ theme: t, data, color }: { theme: Theme; data: number[]; color: string }) {
+function SparkRow({
+  theme: t,
+  data,
+  color,
+  leftLabel,
+  rightLabel,
+}: {
+  theme: Theme;
+  data: number[];
+  color: string;
+  leftLabel: string;
+  rightLabel: string;
+}) {
   return (
     <div style={{ padding: '0 18px 14px' }}>
       <Sparkline data={data} color={color} height={60} />
@@ -351,8 +369,8 @@ function SparkRow({ theme: t, data, color }: { theme: Theme; data: number[]; col
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        <span>14 days ago</span>
-        <span>Today</span>
+        <span>{leftLabel}</span>
+        <span>{rightLabel}</span>
       </div>
     </div>
   );
