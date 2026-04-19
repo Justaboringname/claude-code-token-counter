@@ -1,0 +1,51 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font-family: "Söhne", "Inter", -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #2C1810;
+
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: default;
+}
+
+body {
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: opacity 120ms ease;
+}
+
+button:focus,
+button:focus-visible,
+button:active {
+  outline: none;
+  box-shadow: none;
+}
+
+button:active {
+  transform: none;
+}
+
+*::selection {
+  background: transparent;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
