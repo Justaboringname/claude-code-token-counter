@@ -99,20 +99,54 @@ export const darkTheme: Theme = {
   previewBg: 'linear-gradient(180deg, rgba(46,44,42,0.55) 0%, rgba(20,19,18,0.62) 100%)',
 };
 
-export function useDarkMode(): { isDark: boolean; toggle: () => void } {
-  const [isDark, setIsDark] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
-    const stored = window.localStorage.getItem('theme');
-    if (stored === 'dark') return true;
-    if (stored === 'light') return false;
-    // Default: dark. The native NSGlassEffectView backdrop (see lib.rs)
-    // follows the window appearance set via `set_theme`, so dark theme =
-    // dark glass + light text and light theme = light glass + dark text —
-    // both legible. We default dark because it pairs best with most
-    // wallpapers; users flip via the sun/moon toggle.
-    return true;
-  });
+export type ThemeMode = 'auto' | 'light' | 'dark';
 
+// Local-clock schedule for `auto` mode. Daytime is [DAY_START_HOUR,
+// NIGHT_START_HOUR); everything else is night. Adjust these two to taste
+// (or swap isNightNow for a sunrise/sunset calc if you want it geo-accurate).
+const DAY_START_HOUR = 7; // 07:00 → switch to light
+const NIGHT_START_HOUR = 19; // 19:00 → switch to dark
+const AUTO_TICK_MS = 60_000; // re-check the clock once a minute
+
+function isNightNow(): boolean {
+  const h = new Date().getHours();
+  return h < DAY_START_HOUR || h >= NIGHT_START_HOUR;
+}
+
+function readMode(): ThemeMode {
+  if (typeof window === 'undefined') return 'auto';
+  const stored = window.localStorage.getItem('theme');
+  if (stored === 'dark' || stored === 'light' || stored === 'auto') return stored;
+  // No stored choice → follow the day/night schedule by default.
+  return 'auto';
+}
+
+function resolveDark(mode: ThemeMode): boolean {
+  if (mode === 'dark') return true;
+  if (mode === 'light') return false;
+  return isNightNow();
+}
+
+// Theme controller. `mode` is the user's choice (auto/light/dark, persisted);
+// `isDark` is the resolved appearance actually in effect. In `auto` mode the
+// clock is polled so the theme flips at the day↔night boundary while the app
+// stays open. `cycleMode` rotates Auto → Light → Dark → Auto.
+export function useDarkMode(): { isDark: boolean; mode: ThemeMode; cycleMode: () => void } {
+  const [mode, setMode] = useState<ThemeMode>(() => readMode());
+  const [isDark, setIsDark] = useState<boolean>(() => resolveDark(readMode()));
+
+  useEffect(() => {
+    // Resolve immediately for the selected mode.
+    setIsDark(resolveDark(mode));
+    if (mode !== 'auto') return;
+    // Auto: keep re-resolving so it crosses the day/night line on its own.
+    // setState with an unchanged primitive is a no-op, so this is cheap.
+    const id = window.setInterval(() => setIsDark(resolveDark('auto')), AUTO_TICK_MS);
+    return () => window.clearInterval(id);
+  }, [mode]);
+
+  // Drive the native NSGlassEffectView backdrop (see lib.rs): dark theme =
+  // dark glass + light text, light theme = light glass + dark text.
   useEffect(() => {
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     if (isTauri) {
@@ -120,17 +154,13 @@ export function useDarkMode(): { isDark: boolean; toggle: () => void } {
     }
   }, [isDark]);
 
-  // No prefers-color-scheme listener: we keep an explicit user choice
-  // (persisted in localStorage) rather than auto-flipping with the
-  // system, so the glass appearance stays where the user put it.
-
-  const toggle = () => {
-    setIsDark((v) => {
-      const next = !v;
-      window.localStorage.setItem('theme', next ? 'dark' : 'light');
+  const cycleMode = () => {
+    setMode((m) => {
+      const next: ThemeMode = m === 'auto' ? 'light' : m === 'light' ? 'dark' : 'auto';
+      window.localStorage.setItem('theme', next);
       return next;
     });
   };
 
-  return { isDark, toggle };
+  return { isDark, mode, cycleMode };
 }

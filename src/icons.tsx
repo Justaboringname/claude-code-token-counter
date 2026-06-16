@@ -131,6 +131,14 @@ export const Icon = {
       />
     </svg>
   ),
+  // Auto appearance — half-filled circle (the macOS "automatic" glyph):
+  // outlined ring with the left semicircle filled.
+  Auto: ({ size = 12, color = 'currentColor' }: ColorSize) => (
+    <svg width={size} height={size} viewBox="0 0 12 12" fill="none">
+      <circle cx="6" cy="6" r="4.2" stroke={color} strokeWidth="1.3" fill="none" />
+      <path d="M6 1.8 A4.2 4.2 0 0 0 6 10.2 Z" fill={color} />
+    </svg>
+  ),
   MenuBar: ({ size = 16 }: { size?: number }) => (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
       <path d="M8 2C8 2 4 4 4 8c0 2 1.5 4 4 4s4-2 4-4c0-4-4-6-4-6z" fill="#D97757" />

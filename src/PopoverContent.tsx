@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { Icon, iconBySemantic } from './icons';
 import { Sparkline } from './Sparkline';
 import { ModelUsage, costForModel, displayToolName, fmtMoney, fmtTokens, modelMeta, toolColor } from './format';
-import { Theme, darkTheme, lightTheme, useDarkMode } from './theme';
+import { Theme, ThemeMode, darkTheme, lightTheme, useDarkMode } from './theme';
 import { GlassSurface } from './GlassSurface';
 
 type Range = 'session' | 'today' | 'week' | 'month' | 'all';
@@ -136,7 +136,7 @@ export function PopoverContent() {
   const [range, setRange] = useState<Range>('today');
   const [plan] = useState<PlanId>(() => readPlan());
   const [usage, setUsage] = useState<Usage | null>(() => readCached('today'));
-  const { isDark, toggle } = useDarkMode();
+  const { isDark, mode, cycleMode } = useDarkMode();
   const t: Theme = isDark ? darkTheme : lightTheme;
   const sparkColor = isDark ? '#BDB7AF' : '#B8532F';
   const lastDisplayedJson = useRef<string>('');
@@ -225,7 +225,7 @@ export function PopoverContent() {
 
   return (
     <GlassSurface theme={t}>
-      <TitleBar theme={t} isDark={isDark} onToggleTheme={toggle} onRefresh={() => fetchFresh(range, true)} />
+      <TitleBar theme={t} mode={mode} isDark={isDark} onCycleTheme={cycleMode} onRefresh={() => fetchFresh(range, true)} />
       <RangeBar theme={t} range={range} onPick={pickRange} />
       <Hero theme={t} usage={usage} />
       <SparkRow
@@ -243,13 +243,15 @@ export function PopoverContent() {
 
 function TitleBar({
   theme: t,
+  mode,
   isDark,
-  onToggleTheme,
+  onCycleTheme,
   onRefresh,
 }: {
   theme: Theme;
+  mode: ThemeMode;
   isDark: boolean;
-  onToggleTheme: () => void;
+  onCycleTheme: () => void;
   onRefresh: () => void;
 }) {
   return (
@@ -276,8 +278,25 @@ function TitleBar({
         <button onClick={onRefresh} style={iconBtn()} aria-label="Refresh">
           <Icon.Refresh size={12} />
         </button>
-        <button onClick={onToggleTheme} style={iconBtn()} aria-label="Toggle theme">
-          {isDark ? <Icon.Sun size={13} /> : <Icon.Moon size={13} />}
+        <button
+          onClick={onCycleTheme}
+          style={iconBtn()}
+          aria-label={`Theme: ${mode}`}
+          title={
+            mode === 'auto'
+              ? `Auto theme — ${isDark ? 'night' : 'day'} right now (click for Light)`
+              : mode === 'light'
+                ? 'Light theme (click for Dark)'
+                : 'Dark theme (click for Auto)'
+          }
+        >
+          {mode === 'auto' ? (
+            <Icon.Auto size={13} />
+          ) : mode === 'light' ? (
+            <Icon.Sun size={13} />
+          ) : (
+            <Icon.Moon size={13} />
+          )}
         </button>
       </div>
     </div>
