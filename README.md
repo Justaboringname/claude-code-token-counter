@@ -4,11 +4,11 @@ macOS popover app that shows how many tokens Claude Code has used and what they 
 
 ## Features
 
-- **Cost breakdown by range**: Live / Session / Today / Week / Month / All-time
+- **Cost breakdown by range**: Session / Today / Week / Month / All-time
 - **Per-model totals** with accurate 2026 pricing (Opus 4.6/4.7 at $5/$25 per 1M, Sonnet 4.x at $3/$15, Haiku 4.5 at $1/$5; priority/fast tier at 6×)
 - **Top tool calls** grid (Read, Edit, Bash, Grep, WebFetch, Glob) with call counts
 - **14-day sparkline** of daily spend with delta vs yesterday
-- **Auto-refresh**: file watcher on `~/.claude/projects/` emits updates instantly when Claude Code writes new events; 15s polling fallback (5s in Live range)
+- **Auto-refresh**: file watcher on `~/.claude/projects/` emits updates instantly when Claude Code writes new events; 15s polling fallback
 - **Native liquid glass** via macOS `NSVisualEffectView` — no CSS backdrop-filter flicker
 - **Dark mode** that syncs native window appearance (follows system or manual override)
 - **Dynamic window height** via `ResizeObserver` + `setSize`

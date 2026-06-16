@@ -1,4 +1,4 @@
-import { CSSProperties, ReactNode, useEffect, useRef } from 'react';
+import { CSSProperties, ReactNode, useEffect, useRef, useState } from 'react';
 import { Theme } from './theme';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 
@@ -7,92 +7,109 @@ interface Props {
   children: ReactNode;
 }
 
+// Corner radius of the panel. Kept in lockstep with the native
+// NSGlassEffectView corner radius set in `lib.rs` (set_effect) — the
+// native Liquid Glass slab IS the background; this only clips the
+// webview content so it doesn't spill past the glass's rounded corners.
+const RADIUS = 20;
+
+const FULLSCREEN_CARD_W = 900;
+const FULLSCREEN_ZOOM = 2.0;
+
+function detectFullscreen(): boolean {
+  if (typeof window === 'undefined') return false;
+  const sw = window.screen?.availWidth ?? 0;
+  const sh = window.screen?.availHeight ?? 0;
+  if (!sw || !sh) return false;
+  return window.innerWidth >= sw - 10 && window.innerHeight >= sh - 10;
+}
+
 export function GlassSurface({ theme: t, children }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setFullscreen] = useState<boolean>(() => detectFullscreen());
+
+  // In the real app the background glass is the native NSGlassEffectView
+  // (see lib.rs). In a plain browser preview there's no native layer, so
+  // fall back to a simple translucent card just so the layout is visible.
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     if (!isTauri) return;
 
-    let last = 0;
+    // Compact mode: window height tracks content; width preserved.
+    // Fullscreen mode: never touch window sizing — OS owns it.
     let raf = 0;
-    const apply = (h: number) => {
-      const target = Math.max(200, Math.ceil(h));
-      if (Math.abs(target - last) < 2) return;
-      last = target;
+    const apply = (contentH: number) => {
+      if (detectFullscreen()) return; // hands off in fullscreen
+      const target = Math.max(200, Math.ceil(contentH));
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if (Math.abs(h - target) < 2) return;
       getCurrentWindow()
-        .setSize(new LogicalSize(420, target))
+        .setSize(new LogicalSize(w, target))
         .catch(() => {});
     };
-
-    const ro = new ResizeObserver((entries) => {
+    const schedule = (h: number) => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const h = entries[0]?.contentRect.height ?? el.scrollHeight;
-        apply(h);
-      });
+      raf = requestAnimationFrame(() => apply(h));
+    };
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height ?? el.scrollHeight;
+      schedule(h);
     });
     ro.observe(el);
+    const onWindowResize = () => {
+      setFullscreen(detectFullscreen());
+      schedule(el.scrollHeight);
+    };
+    window.addEventListener('resize', onWindowResize);
     apply(el.scrollHeight);
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      window.removeEventListener('resize', onWindowResize);
     };
-  }, []);
+  }, [isTauri]);
 
-  return (
+  // The card. In Tauri it's fully transparent — the native Liquid Glass
+  // shows through; we only round-clip the content. In browser preview we
+  // paint a light translucent stand-in so the layout is still legible.
+  const card = (
     <div
       ref={rootRef}
       style={{
         position: 'relative',
-        borderRadius: 20,
-        width: '100vw',
-        isolation: 'isolate',
-        contain: 'paint',
+        borderRadius: RADIUS,
+        width: isFullscreen ? FULLSCREEN_CARD_W : '100vw',
         overflow: 'hidden',
+        background: isTauri ? 'transparent' : t.previewBg,
       }}
     >
-      <div style={tintLayer(t)} />
-      <div style={highlightLayer(t)} />
-      <div style={sheenLayer(t)} />
       <div style={contentLayer(t)}>{children}</div>
     </div>
   );
-}
 
-function tintLayer(t: Theme): CSSProperties {
-  return {
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 20,
-    background: t.glassTint,
-    pointerEvents: 'none',
-  };
-}
+  // Compact (default): card fills window width 1:1, window auto-sizes
+  // to content height.
+  if (!isFullscreen) return card;
 
-function highlightLayer(t: Theme): CSSProperties {
-  return {
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 20,
-    boxShadow: t.glassInsetShadow,
-    pointerEvents: 'none',
-  };
-}
-
-function sheenLayer(t: Theme): CSSProperties {
-  return {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 60,
-    borderRadius: '20px 20px 0 0',
-    background: t.sheenGrad,
-    pointerEvents: 'none',
-  };
+  // Fullscreen: an explicit ENLARGED view, zoomed 2× and centered.
+  return (
+    <div
+      style={{
+        width: '100vw',
+        minHeight: '100vh',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ zoom: FULLSCREEN_ZOOM }}>{card}</div>
+    </div>
+  );
 }
 
 function contentLayer(t: Theme): CSSProperties {

@@ -22,18 +22,25 @@ button {
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  transition: opacity 120ms ease;
+  /* Liquid Glass controls feel responsive to touch: a quick brighten on
+     hover, a gentle press-in on click. transform/filter/opacity only —
+     all GPU-compositable, no layout. */
+  transition: filter 140ms ease, transform 120ms ease, opacity 140ms ease, background 180ms ease;
+}
+
+button:hover {
+  filter: brightness(1.09) saturate(1.04);
+}
+
+button:active {
+  transform: scale(0.96);
+  filter: brightness(0.97);
 }
 
 button:focus,
-button:focus-visible,
-button:active {
+button:focus-visible {
   outline: none;
   box-shadow: none;
-}
-
-button:active {
-  transform: none;
 }
 
 *::selection {
@@ -48,4 +55,15 @@ button:active {
 .no-drag {
   -webkit-app-region: no-drag;
   app-region: no-drag;
+}
+
+/* Honor the system "reduce motion" setting — kill the press/hover
+   animation entirely for users who asked for less movement. */
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+  button:active {
+    transform: none;
+  }
 }

@@ -4,8 +4,9 @@ use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 #[tauri::command]
-fn get_usage(range: String) -> usage::Usage {
-    usage::compute_usage(&range)
+fn get_usage(range: String, plan: Option<String>) -> usage::Usage {
+    let plan_id = plan.as_deref().unwrap_or("max5x");
+    usage::compute_usage_with_plan(&range, plan_id)
 }
 
 #[tauri::command]
@@ -57,18 +58,28 @@ fn spawn_file_watcher(app_handle: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_liquid_glass::init())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                use tauri_plugin_liquid_glass::{
+                    GlassMaterialVariant, LiquidGlassConfig, LiquidGlassExt,
+                };
                 let window = app.get_webview_window("main").expect("main window");
-                apply_vibrancy(
+                // macOS 26+ Liquid Glass via the private NSGlassEffectView
+                // (inserted as the window's backdrop, below the transparent
+                // webview). Falls back to NSVisualEffectView pre-26. This is
+                // real refractive glass — the CSS surface only styles content.
+                if let Err(e) = app.liquid_glass().set_effect(
                     &window,
-                    NSVisualEffectMaterial::HudWindow,
-                    Some(NSVisualEffectState::Active),
-                    Some(20.0),
-                )
-                .expect("apply vibrancy");
+                    LiquidGlassConfig {
+                        corner_radius: 20.0,
+                        variant: GlassMaterialVariant::Regular,
+                        ..Default::default()
+                    },
+                ) {
+                    eprintln!("liquid glass apply failed: {e}");
+                }
             }
             spawn_file_watcher(app.handle().clone());
             Ok(())

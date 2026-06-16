@@ -3,11 +3,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Icon, iconBySemantic } from './icons';
 import { Sparkline } from './Sparkline';
-import { ModelUsage, costForModel, fmtMoney, fmtTokens, modelMeta, toolColor } from './format';
+import { ModelUsage, costForModel, displayToolName, fmtMoney, fmtTokens, modelMeta, toolColor } from './format';
 import { Theme, darkTheme, lightTheme, useDarkMode } from './theme';
 import { GlassSurface } from './GlassSurface';
 
-type Range = 'live' | 'session' | 'today' | 'week' | 'month' | 'all';
+type Range = 'session' | 'today' | 'week' | 'month' | 'all';
 
 interface Usage {
   byModel: Record<string, ModelUsage>;
@@ -19,12 +19,35 @@ interface Usage {
   totalCost: number;
   totalTokens: number;
   deltaPct: number | null;
+  creditUsed5h: number;
+  creditUsedWeek: number;
+  creditLimit5h: number;
+  creditLimitWeek: number;
+  planLabel: string;
+  planId: string;
+  sessionStart: string | null;
+  tokens5h: number;
+  tokensWeek: number;
+  priorityEvents5h: number;
+  activeBlockStart: string | null;
+  tokenLimit5h: number;
 }
+
+type PlanId = 'pro' | 'max5x' | 'max20';
+const PLAN_STORAGE_KEY = 'plan-id-v1';
+
+function readPlan(): PlanId {
+  try {
+    const raw = window.localStorage.getItem(PLAN_STORAGE_KEY);
+    if (raw === 'pro' || raw === 'max5x' || raw === 'max20') return raw;
+  } catch {}
+  return 'max5x';
+}
+
 
 const CANONICAL_TOOLS = ['Read', 'Edit', 'Bash', 'Grep', 'WebFetch', 'Glob'];
 
 const RANGES: { id: Range; label: string }[] = [
-  { id: 'live', label: 'Live' },
   { id: 'session', label: 'Session' },
   { id: 'today', label: 'Today' },
   { id: 'week', label: 'Week' },
@@ -49,7 +72,13 @@ function writeCached(r: Range, u: Usage) {
   } catch {}
 }
 
-function sampleUsage(r: Range): Usage {
+const PLAN_SAMPLE: Record<PlanId, { label: string; l5: number; lw: number; t5: number }> = {
+  pro: { label: 'Pro', l5: 550_000, lw: 5_000_000, t5: 9_800_000 },
+  max5x: { label: 'Max 5x', l5: 3_300_000, lw: 41_670_000, t5: 58_600_000 },
+  max20: { label: 'Max 20x', l5: 11_000_000, lw: 83_330_000, t5: 195_300_000 },
+};
+
+function sampleUsage(r: Range, plan: PlanId): Usage {
   const byModel: Record<string, ModelUsage> = {
     'claude-opus-4': { in: 18, out: 12, cacheWrite: 84, cacheRead: 340 },
     'claude-sonnet-4-5': { in: 142, out: 38, cacheWrite: 612, cacheRead: 8420 },
@@ -61,6 +90,7 @@ function sampleUsage(r: Range): Usage {
     (s, u) => s + u.in + u.out + u.cacheWrite + u.cacheRead,
     0,
   );
+  const ps = PLAN_SAMPLE[plan];
   return {
     byModel,
     byTool: [
@@ -78,7 +108,6 @@ function sampleUsage(r: Range): Usage {
     sparkLeft: '14 days ago',
     sparkRight: 'Today',
     rangeLabel: {
-      live: 'Live',
       session: 'Current session',
       today: 'Today',
       week: 'This week',
@@ -88,11 +117,24 @@ function sampleUsage(r: Range): Usage {
     totalCost,
     totalTokens,
     deltaPct: 18,
+    creditUsed5h: ps.l5 * 0.6,
+    creditUsedWeek: ps.lw * 0.45,
+    creditLimit5h: ps.l5,
+    creditLimitWeek: ps.lw,
+    planLabel: ps.label,
+    planId: plan,
+    sessionStart: new Date(Date.now() - 2.3 * 3600 * 1000).toISOString(),
+    tokens5h: ps.t5 * 0.62,
+    tokensWeek: ps.t5 * 5.2,
+    priorityEvents5h: 0,
+    activeBlockStart: new Date(Date.now() - 2.3 * 3600 * 1000).toISOString(),
+    tokenLimit5h: ps.t5,
   };
 }
 
 export function PopoverContent() {
   const [range, setRange] = useState<Range>('today');
+  const [plan] = useState<PlanId>(() => readPlan());
   const [usage, setUsage] = useState<Usage | null>(() => readCached('today'));
   const { isDark, toggle } = useDarkMode();
   const t: Theme = isDark ? darkTheme : lightTheme;
@@ -109,8 +151,8 @@ export function PopoverContent() {
   const fetchFresh = (r: Range, isActiveRange: boolean): Promise<void> => {
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     const promise = isTauri
-      ? invoke<Usage>('get_usage', { range: r })
-      : Promise.resolve(sampleUsage(r));
+      ? invoke<Usage>('get_usage', { range: r, plan })
+      : Promise.resolve(sampleUsage(r, plan));
     return promise
       .then((u) => {
         writeCached(r, u);
@@ -127,10 +169,9 @@ export function PopoverContent() {
 
   useEffect(() => {
     fetchFresh(range, true);
-    const intervalMs = range === 'live' ? 5000 : 15000;
-    const timer = setInterval(() => fetchFresh(range, true), intervalMs);
+    const timer = setInterval(() => fetchFresh(range, true), 15000);
     return () => clearInterval(timer);
-  }, [range]);
+  }, [range, plan]);
 
   useEffect(() => {
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -141,11 +182,11 @@ export function PopoverContent() {
     return () => {
       unlistenPromise.then((un) => un()).catch(() => {});
     };
-  }, [range]);
+  }, [range, plan]);
 
   useEffect(() => {
     let cancelled = false;
-    const queue: Range[] = ['today', 'week', 'month', 'session', 'all', 'live'];
+    const queue: Range[] = ['today', 'week', 'month', 'session', 'all'];
     (async () => {
       await new Promise((r) => setTimeout(r, 1500));
       for (const r of queue) {
@@ -384,6 +425,7 @@ interface ModelRow {
   cost: number;
 }
 
+
 function ByModel({
   theme: t,
   models,
@@ -508,7 +550,7 @@ function ToolCalls({
           {total.toLocaleString()} total
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
         {tiles.map((tool) => {
           const iconName = iconBySemantic(tool.name);
           const IconC = Icon[iconName] as (p: { color?: string; size?: number }) => React.ReactElement;
@@ -516,12 +558,14 @@ function ToolCalls({
           return (
             <div
               key={tool.name}
+              title={tool.name}
               style={{
                 background: t.tileBg,
                 border: t.tileBorder,
                 borderRadius: 10,
                 padding: '8px 10px',
                 boxShadow: t.tileInset,
+                minWidth: 0,
               }}
             >
               <div
@@ -535,7 +579,15 @@ function ToolCalls({
                 }}
               >
                 <IconC color={c} size={11} />
-                {tool.name}
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {displayToolName(tool.name)}
+                </span>
               </div>
               <div
                 style={{
